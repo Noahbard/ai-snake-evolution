@@ -368,12 +368,12 @@ export default function SnakeAI() {
     
     // 撞墙严重扣分
     if (newHead.x < 0 || newHead.x >= GRID_SIZE || newHead.y < 0 || newHead.y >= GRID_SIZE) {
-      return -1000;
+      return -2000;
     }
     
     // 撞自己严重扣分
     if (state.snake.some(segment => segment.x === newHead.x && segment.y === newHead.y)) {
-      return -1000;
+      return -2000;
     }
     
     // 反向移动扣分
@@ -382,14 +382,17 @@ export default function SnakeAI() {
       (state.direction === 'DOWN' && direction === 'UP') ||
       (state.direction === 'LEFT' && direction === 'RIGHT') ||
       (state.direction === 'RIGHT' && direction === 'LEFT');
-    if (isOppositeDirection) score -= 500;
+    if (isOppositeDirection) return -1500;
     
-    // 离墙太近扣分
-    const distToWall = Math.min(newHead.x, GRID_SIZE - 1 - newHead.x, newHead.y, GRID_SIZE - 1 - newHead.y);
-    if (distToWall <= 1) score -= 100;
-    if (distToWall <= 2) score -= 50;
+    // 空间感知 - 评估移动后的可用空间
+    const freeSpaceAfterMove = calculateFreeSpace(newHead, state.snake);
+    score += freeSpaceAfterMove * 10;
     
-    // 朝向食物加分
+    // 身体陷阱检测 - 检查是否会被自己身体包围
+    const trapRisk = calculateTrapRisk(newHead, state.snake);
+    score -= trapRisk * 200;
+    
+    // 食物追逐策略 - 但不能过于激进
     const foodDx = state.food.x - newHead.x;
     const foodDy = state.food.y - newHead.y;
     const oldFoodDx = state.food.x - head.x;
@@ -398,29 +401,98 @@ export default function SnakeAI() {
     const newDist = Math.abs(foodDx) + Math.abs(foodDy);
     const oldDist = Math.abs(oldFoodDx) + Math.abs(oldFoodDy);
     
-    if (newDist < oldDist) score += 100;
-    else if (newDist > oldDist) score -= 50;
+    // 只有在安全的情况下才积极追食物
+    if (freeSpaceAfterMove > 3 && trapRisk < 0.3) {
+      if (newDist < oldDist) score += 80;
+      else if (newDist > oldDist) score -= 30;
+    } else {
+      // 不安全时，远离食物反而更好
+      if (newDist > oldDist) score += 40;
+    }
     
-    // 检查前方几步是否安全
-    for (let i = 2; i <= 4; i++) {
+    // 长期路径规划 - 检查前方5步的安全性
+    let continuousSteps = 0;
+    for (let step = 1; step <= 5; step++) {
       let checkHead = { ...newHead };
       switch (direction) {
-        case 'UP': checkHead.y -= i; break;
-        case 'DOWN': checkHead.y += i; break;
-        case 'LEFT': checkHead.x -= i; break;
-        case 'RIGHT': checkHead.x += i; break;
+        case 'UP': checkHead.y -= step; break;
+        case 'DOWN': checkHead.y += step; break;
+        case 'LEFT': checkHead.x -= step; break;
+        case 'RIGHT': checkHead.x += step; break;
       }
       
-      if (checkHead.x < 0 || checkHead.x >= GRID_SIZE || checkHead.y < 0 || checkHead.y >= GRID_SIZE) {
-        score -= 20 / i;
+      if (checkHead.x < 0 || checkHead.x >= GRID_SIZE || 
+          checkHead.y < 0 || checkHead.y >= GRID_SIZE ||
+          state.snake.some(segment => segment.x === checkHead.x && segment.y === checkHead.y)) {
+        break;
       }
-      
-      if (state.snake.some(segment => segment.x === checkHead.x && segment.y === checkHead.y)) {
-        score -= 30 / i;
+      continuousSteps++;
+    }
+    
+    score += continuousSteps * 30; // 能走得越远越好
+    
+    // 尾巴跟随策略 - 有时跟着尾巴走是安全的
+    if (state.snake.length > 4) {
+      const tail = state.snake[state.snake.length - 1];
+      const distToTail = Math.abs(newHead.x - tail.x) + Math.abs(newHead.y - tail.y);
+      if (distToTail <= 2 && freeSpaceAfterMove < 4) {
+        score += 60; // 靠近尾巴在狭窄空间是好策略
       }
     }
     
     return score;
+  }, []);
+
+  const calculateFreeSpace = useCallback((pos: Position, snake: Position[]): number => {
+    let freeCount = 0;
+    const visited = new Set<string>();
+    const queue = [pos];
+    
+    while (queue.length > 0 && freeCount < 15) { // 限制搜索范围
+      const current = queue.shift()!;
+      const key = `${current.x},${current.y}`;
+      
+      if (visited.has(key)) continue;
+      visited.add(key);
+      
+      if (current.x < 0 || current.x >= GRID_SIZE || 
+          current.y < 0 || current.y >= GRID_SIZE ||
+          snake.some(seg => seg.x === current.x && seg.y === current.y)) {
+        continue;
+      }
+      
+      freeCount++;
+      
+      // 添加邻居
+      queue.push(
+        {x: current.x + 1, y: current.y},
+        {x: current.x - 1, y: current.y},
+        {x: current.x, y: current.y + 1},
+        {x: current.x, y: current.y - 1}
+      );
+    }
+    
+    return freeCount;
+  }, []);
+
+  const calculateTrapRisk = useCallback((pos: Position, snake: Position[]): number => {
+    let surroundingBodyCount = 0;
+    const checkPositions = [
+      {x: pos.x + 1, y: pos.y}, {x: pos.x - 1, y: pos.y},
+      {x: pos.x, y: pos.y + 1}, {x: pos.x, y: pos.y - 1},
+      {x: pos.x + 1, y: pos.y + 1}, {x: pos.x - 1, y: pos.y - 1},
+      {x: pos.x + 1, y: pos.y - 1}, {x: pos.x - 1, y: pos.y + 1}
+    ];
+    
+    for (const checkPos of checkPositions) {
+      if (checkPos.x < 0 || checkPos.x >= GRID_SIZE || 
+          checkPos.y < 0 || checkPos.y >= GRID_SIZE ||
+          snake.some(seg => seg.x === checkPos.x && seg.y === checkPos.y)) {
+        surroundingBodyCount++;
+      }
+    }
+    
+    return surroundingBodyCount / 8.0; // 返回0-1的风险值
   }, []);
 
   const getAIDirection = useCallback((state: GameState): string => {
