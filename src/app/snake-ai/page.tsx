@@ -200,6 +200,12 @@ export default function SnakeAI() {
 
   const [isTraining, setIsTraining] = useState(false);
   const [speed, setSpeed] = useState(20);
+  const [debugInfo, setDebugInfo] = useState({
+    freeSpace: 0,
+    trapRisk: 0,
+    safetyMode: false,
+    currentDecision: ''
+  });
   const neuralNetRef = useRef(new NeuralNetwork());
   const bestNetRef = useRef(new NeuralNetwork());
   const gameHistoryRef = useRef<number[]>([]);
@@ -499,6 +505,12 @@ export default function SnakeAI() {
     const inputs = getGameInputs(state);
     const outputs = neuralNetRef.current.predict(inputs);
     
+    // 实时计算调试信息
+    const head = state.snake[0];
+    const freeSpace = calculateFreeSpace(head, state.snake);
+    const trapRisk = calculateTrapRisk(head, state.snake);
+    const safetyMode = freeSpace < 4 || trapRisk > 0.5;
+    
     const directionScores = directions.map((dir, index) => ({
       dir,
       aiScore: outputs[index] * 100,
@@ -514,21 +526,40 @@ export default function SnakeAI() {
     // 过滤出安全方向
     const safeDirs = directionScores.filter(d => d.safetyScore > -500);
     
+    let chosenDirection;
+    let decision = '';
+    
     if (safeDirs.length === 0) {
       // 紧急情况，选择最不坏的选项
       const leastBad = directionScores.reduce((best, current) => 
         current.safetyScore > best.safetyScore ? current : best
       );
-      return leastBad.dir;
+      chosenDirection = leastBad.dir;
+      decision = '💀 紧急避险';
+    } else {
+      // 选择总分最高的安全方向
+      const bestDirection = safeDirs.reduce((best, current) => 
+        current.totalScore > best.totalScore ? current : best
+      );
+      chosenDirection = bestDirection.dir;
+      
+      if (safetyMode) {
+        decision = '🛡️ 安全优先';
+      } else {
+        decision = '🎯 追逐食物';
+      }
     }
     
-    // 选择总分最高的安全方向
-    const bestDirection = safeDirs.reduce((best, current) => 
-      current.totalScore > best.totalScore ? current : best
-    );
+    // 更新调试信息
+    setDebugInfo({
+      freeSpace: Math.round(freeSpace),
+      trapRisk: Math.round(trapRisk * 100),
+      safetyMode,
+      currentDecision: decision
+    });
     
-    return bestDirection.dir;
-  }, [getGameInputs, evaluateDirection]);
+    return chosenDirection;
+  }, [getGameInputs, evaluateDirection, calculateFreeSpace, calculateTrapRisk]);
 
   const resetGame = useCallback(() => {
     const initialState = {
