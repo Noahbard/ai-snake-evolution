@@ -346,9 +346,8 @@ export default function SnakeAI() {
       stepsWithoutFoodRef.current += 1;
     }
 
-    if (stepsWithoutFoodRef.current > Math.max(40 + state.snake.length * 2, 60)) {
-      return { ...state, gameOver: true };
-    }
+    // 移除超时杀死机制 - 贪吃蛇应该只因撞墙或撞身体而死
+    // 长时间不吃食物只会在奖励系统中体现，不应该强制死亡
 
     return {
       ...state,
@@ -607,28 +606,30 @@ export default function SnakeAI() {
   const currentRewardRef = useRef(0);
 
   const calculateFitness = useCallback((score: number, steps: number, snake: Position[], currentDistance: number): number => {
-    const survivalBonus = Math.min(steps / 3, 150);
-    const lengthBonus = (snake.length - 1) * 100;
-    const scoreBonus = score * 500; // 提高食物奖励
+    const survivalBonus = Math.min(steps / 2, 200); // 生存本身就有价值
+    const lengthBonus = (snake.length - 1) * 200; // 增长是最重要的
+    const scoreBonus = score * 1000; // 食物奖励最高
     
-    // 安全奖励 - 长时间存活很重要
-    const safetyBonus = steps > 100 ? Math.min((steps - 100) / 10, 200) : 0;
+    // 长期生存奖励 - 鼓励保守但有效的策略
+    const longevityBonus = steps > 200 ? Math.min((steps - 200) / 5, 500) : 0;
     
-    // 效率奖励 - 但不能过度追求效率导致冒险
-    const efficiencyBonus = score > 0 ? Math.min((score / Math.max(steps / 80, 1)) * 30, 100) : 0;
+    // 渐进式停滞惩罚 - 而非直接死亡
+    let stagnationPenalty = 0;
+    if (stepsWithoutFoodRef.current > 100) {
+      // 使用递增的惩罚，而非固定惩罚
+      const excessSteps = stepsWithoutFoodRef.current - 100;
+      stagnationPenalty = -(excessSteps * excessSteps * 0.1); // 二次惩罚，鼓励效率但不强制
+    }
     
     // 成长奖励 - 长蛇指数级奖励
-    const growthMultiplier = snake.length > 5 ? Math.pow(1.5, Math.min(snake.length - 5, 10)) : 1;
+    const growthMultiplier = snake.length > 5 ? Math.pow(1.8, Math.min(snake.length - 5, 8)) : 1;
     
-    // 探索与保守平衡
-    const explorationPenalty = stepsWithoutFoodRef.current > 40 ? -(stepsWithoutFoodRef.current - 40) * 3 : 0;
+    // 平衡奖励 - 既要安全又要成长
+    const balanceBonus = score > 0 && steps > score * 50 ? (score * 50) : 0;
     
-    // 急躁惩罚 - 防止过于激进追食物
-    const recklessPenalty = currentRewardRef.current < -20 ? Math.abs(currentRewardRef.current) : 0;
+    const totalFitness = scoreBonus + (lengthBonus * growthMultiplier) + survivalBonus + longevityBonus + balanceBonus + stagnationPenalty + currentRewardRef.current;
     
-    const totalFitness = (scoreBonus + lengthBonus * growthMultiplier + survivalBonus + safetyBonus + efficiencyBonus + explorationPenalty + currentRewardRef.current) - recklessPenalty;
-    
-    return Math.max(totalFitness, 0); // 确保fitness不为负
+    return Math.max(totalFitness, steps); // 最低奖励等于生存步数
   }, []);
 
   const updateRealtimeRewards = useCallback((state: GameState) => {
@@ -643,32 +644,37 @@ export default function SnakeAI() {
     if (previousDistanceRef.current > 0) {
       const distanceChange = previousDistanceRef.current - currentDistance;
       
-      // 根据安全状况调整奖励
-      if (freeSpace > 5 && trapRisk < 0.4) {
-        // 安全时积极追食物
-        if (distanceChange > 0) currentRewardRef.current += 8;
-        else if (distanceChange < 0) currentRewardRef.current -= 3;
-      } else if (freeSpace < 3 || trapRisk > 0.6) {
-        // 危险时优先安全，远离食物也是好选择
-        if (distanceChange > 0) currentRewardRef.current += 2; // 小奖励
-        else if (distanceChange < 0) currentRewardRef.current += 5; // 保守策略奖励
+      // 更温和的奖励机制
+      if (freeSpace > 6 && trapRisk < 0.3) {
+        // 很安全时鼓励追食物
+        if (distanceChange > 0) currentRewardRef.current += 6;
+        else if (distanceChange < 0) currentRewardRef.current -= 2;
+      } else if (freeSpace < 4 || trapRisk > 0.6) {
+        // 危险时鼓励保守，不严厉惩罚远离食物
+        if (distanceChange > 0) currentRewardRef.current += 3;
+        else if (distanceChange < 0) currentRewardRef.current += 2; // 保守也有奖励
       } else {
-        // 中等安全时平衡策略
+        // 一般情况平衡奖励
         if (distanceChange > 0) currentRewardRef.current += 4;
-        else if (distanceChange < 0) currentRewardRef.current -= 1;
+        else currentRewardRef.current += 0.5; // 任何移动都有小奖励
       }
     }
     
-    // 生存时间奖励
-    if (stepsWithoutFoodRef.current < 30) {
-      currentRewardRef.current += 0.5; // 健康状态小奖励
-    } else if (stepsWithoutFoodRef.current > 50) {
-      currentRewardRef.current -= (stepsWithoutFoodRef.current - 50) * 0.8;
+    // 渐进式停滞提醒，而非惩罚
+    if (stepsWithoutFoodRef.current < 50) {
+      currentRewardRef.current += 1; // 积极状态奖励
+    } else if (stepsWithoutFoodRef.current > 150) {
+      // 长时间不进食才开始轻微扣分
+      currentRewardRef.current -= Math.min((stepsWithoutFoodRef.current - 150) * 0.1, 5);
     }
     
-    // 空间管理奖励
-    if (freeSpace > 8) currentRewardRef.current += 2; // 保持开阔空间
-    if (trapRisk > 0.7) currentRewardRef.current -= 10; // 陷入困境严重扣分
+    // 空间管理鼓励
+    if (freeSpace > 10) currentRewardRef.current += 3; // 维持大空间
+    if (freeSpace > 6) currentRewardRef.current += 1; // 维持中等空间
+    if (trapRisk > 0.8) currentRewardRef.current -= 8; // 严重困境才扣分
+    
+    // 生存本身就是奖励
+    currentRewardRef.current += 0.2; // 每步存活都有奖励
     
     previousDistanceRef.current = currentDistance;
   }, [calculateFreeSpace, calculateTrapRisk]);
