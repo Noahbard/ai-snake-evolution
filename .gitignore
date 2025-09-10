@@ -2,3 +2,4 @@ node_modules/
 .next/
 *.tar.gz
 .dotclaude/
+ai-snake-evolution.tar.gz
