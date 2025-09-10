@@ -900,12 +900,22 @@ export default function SnakeAI() {
               </div>
 
               <div className="bg-gray-700 rounded-lg p-4">
-                <h3 className="text-lg font-bold text-orange-400">AI学习原理</h3>
+                <h3 className="text-lg font-bold text-orange-400">AI决策状态</h3>
                 <div className="text-sm space-y-2">
-                  <p>🧠 神经网络: 24输入 → 16隐层 → 4输出</p>
-                  <p>🔄 进化算法: 表现好的网络变异继续训练</p>
-                  <p>🎯 奖励机制: 吃到食物+10分, 生存时间越长越好</p>
-                  <p>⚡ 变异率: 表现差时10%变异, 表现好时5%变异</p>
+                  <p>🧠 当前策略: <span className="font-bold">{debugInfo.currentDecision}</span></p>
+                  <p>🌍 可用空间: <span className="font-bold">{debugInfo.freeSpace}</span> 格</p>
+                  <p>⚠️ 陷阱风险: <span className="font-bold">{debugInfo.trapRisk}%</span></p>
+                  <p>🛡️ 安全模式: <span className="font-bold">{debugInfo.safetyMode ? '✅ 启用' : '❌ 关闭'}</span></p>
+                </div>
+              </div>
+
+              <div className="bg-gray-700 rounded-lg p-4">
+                <h3 className="text-lg font-bold text-purple-400">算法改进</h3>
+                <div className="text-sm space-y-2">
+                  <p>🔍 身体感知: 5×5区域密度检测</p>
+                  <p>🚶 路径规划: 前瞻5步安全性</p>
+                  <p>⚖️ 动态平衡: 安全时追食物，危险时保守</p>
+                  <p>🧭 空间管理: 避免自我包围陷阱</p>
                 </div>
               </div>
             </div>
