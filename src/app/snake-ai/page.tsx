@@ -576,18 +576,28 @@ export default function SnakeAI() {
   const currentRewardRef = useRef(0);
 
   const calculateFitness = useCallback((score: number, steps: number, snake: Position[], currentDistance: number): number => {
-    const survivalBonus = Math.min(steps / 5, 100);
-    const lengthBonus = (snake.length - 1) * 50;
-    const scoreBonus = score * 200;
-    const efficiencyBonus = score > 0 ? (score / Math.max(steps / 50, 1)) * 20 : 0;
+    const survivalBonus = Math.min(steps / 3, 150);
+    const lengthBonus = (snake.length - 1) * 100;
+    const scoreBonus = score * 500; // 提高食物奖励
     
-    const distancePenalty = Math.max(0, steps - score * 30) * -1;
-    const stagnationPenalty = stepsWithoutFoodRef.current > 25 ? -stepsWithoutFoodRef.current * 2 : 0;
+    // 安全奖励 - 长时间存活很重要
+    const safetyBonus = steps > 100 ? Math.min((steps - 100) / 10, 200) : 0;
     
-    // 长度奖励递增
-    const lengthMultiplier = snake.length > 5 ? Math.pow(1.2, snake.length - 5) : 1;
+    // 效率奖励 - 但不能过度追求效率导致冒险
+    const efficiencyBonus = score > 0 ? Math.min((score / Math.max(steps / 80, 1)) * 30, 100) : 0;
     
-    return (scoreBonus + lengthBonus * lengthMultiplier + survivalBonus + efficiencyBonus + distancePenalty + stagnationPenalty + currentRewardRef.current) * (snake.length > 10 ? 2 : 1);
+    // 成长奖励 - 长蛇指数级奖励
+    const growthMultiplier = snake.length > 5 ? Math.pow(1.5, Math.min(snake.length - 5, 10)) : 1;
+    
+    // 探索与保守平衡
+    const explorationPenalty = stepsWithoutFoodRef.current > 40 ? -(stepsWithoutFoodRef.current - 40) * 3 : 0;
+    
+    // 急躁惩罚 - 防止过于激进追食物
+    const recklessPenalty = currentRewardRef.current < -20 ? Math.abs(currentRewardRef.current) : 0;
+    
+    const totalFitness = (scoreBonus + lengthBonus * growthMultiplier + survivalBonus + safetyBonus + efficiencyBonus + explorationPenalty + currentRewardRef.current) - recklessPenalty;
+    
+    return Math.max(totalFitness, 0); // 确保fitness不为负
   }, []);
 
   const updateRealtimeRewards = useCallback((state: GameState) => {
@@ -595,24 +605,42 @@ export default function SnakeAI() {
     const food = state.food;
     const currentDistance = Math.abs(head.x - food.x) + Math.abs(head.y - food.y);
     
+    // 计算可用空间作为安全指标
+    const freeSpace = calculateFreeSpace(head, state.snake);
+    const trapRisk = calculateTrapRisk(head, state.snake);
+    
     if (previousDistanceRef.current > 0) {
-      if (currentDistance < previousDistanceRef.current) {
-        currentRewardRef.current += 5;
-      } else if (currentDistance > previousDistanceRef.current) {
-        currentRewardRef.current -= 2;
+      const distanceChange = previousDistanceRef.current - currentDistance;
+      
+      // 根据安全状况调整奖励
+      if (freeSpace > 5 && trapRisk < 0.4) {
+        // 安全时积极追食物
+        if (distanceChange > 0) currentRewardRef.current += 8;
+        else if (distanceChange < 0) currentRewardRef.current -= 3;
+      } else if (freeSpace < 3 || trapRisk > 0.6) {
+        // 危险时优先安全，远离食物也是好选择
+        if (distanceChange > 0) currentRewardRef.current += 2; // 小奖励
+        else if (distanceChange < 0) currentRewardRef.current += 5; // 保守策略奖励
+      } else {
+        // 中等安全时平衡策略
+        if (distanceChange > 0) currentRewardRef.current += 4;
+        else if (distanceChange < 0) currentRewardRef.current -= 1;
       }
     }
     
-    if (stepsWithoutFoodRef.current > 20) {
-      currentRewardRef.current -= 0.5;
+    // 生存时间奖励
+    if (stepsWithoutFoodRef.current < 30) {
+      currentRewardRef.current += 0.5; // 健康状态小奖励
+    } else if (stepsWithoutFoodRef.current > 50) {
+      currentRewardRef.current -= (stepsWithoutFoodRef.current - 50) * 0.8;
     }
     
-    if (stepsWithoutFoodRef.current > 50) {
-      currentRewardRef.current -= 2;
-    }
+    // 空间管理奖励
+    if (freeSpace > 8) currentRewardRef.current += 2; // 保持开阔空间
+    if (trapRisk > 0.7) currentRewardRef.current -= 10; // 陷入困境严重扣分
     
     previousDistanceRef.current = currentDistance;
-  }, []);
+  }, [calculateFreeSpace, calculateTrapRisk]);
 
   const evolveAI = useCallback(() => {
     const currentScore = gameState.score;
