@@ -1,0 +1,817 @@
+'use client';
+
+import { useState, useEffect, useCallback, useRef } from 'react';
+
+interface Position {
+  x: number;
+  y: number;
+}
+
+interface GameState {
+  snake: Position[];
+  food: Position;
+  direction: string;
+  score: number;
+  gameOver: boolean;
+}
+
+interface AIStats {
+  generation: number;
+  bestScore: number;
+  currentScore: number;
+  gamesPlayed: number;
+  averageScore: number;
+  fitness: number;
+  avgSurvivalTime: number;
+  recentProgress: number[];
+  learningTrend: string;
+}
+
+const GRID_SIZE = 20;
+const CANVAS_SIZE = 400;
+
+class NeuralNetwork {
+  weights1: number[][];
+  weights2: number[][];
+  weights3: number[][];
+  bias1: number[];
+  bias2: number[];
+  bias3: number[];
+  fitness: number = 0;
+  
+  constructor(copyFrom?: NeuralNetwork) {
+    if (copyFrom) {
+      this.weights1 = copyFrom.weights1.map(row => [...row]);
+      this.weights2 = copyFrom.weights2.map(row => [...row]);
+      this.weights3 = copyFrom.weights3.map(row => [...row]);
+      this.bias1 = [...copyFrom.bias1];
+      this.bias2 = [...copyFrom.bias2];
+      this.bias3 = [...copyFrom.bias3];
+    } else {
+      this.weights1 = this.randomMatrix(32, 24, 0.5);
+      this.weights2 = this.randomMatrix(24, 16, 0.5);
+      this.weights3 = this.randomMatrix(16, 4, 1.0);
+      this.bias1 = this.randomArray(24, 0.3);
+      this.bias2 = this.randomArray(16, 0.3);
+      this.bias3 = this.randomArray(4, 0.5);
+    }
+  }
+
+  randomMatrix(inputs: number, outputs: number, scale: number = 1.0): number[][] {
+    const limit = Math.sqrt(6 / (inputs + outputs)) * scale;
+    return Array(inputs).fill(0).map(() => 
+      Array(outputs).fill(0).map(() => (Math.random() * 2 - 1) * limit)
+    );
+  }
+
+  randomArray(size: number, scale: number = 1.0): number[] {
+    return Array(size).fill(0).map(() => (Math.random() * 2 - 1) * scale);
+  }
+
+  relu(x: number): number {
+    return Math.max(0, x * 0.01 + (x > 0 ? x : 0));
+  }
+
+  tanh(x: number): number {
+    return Math.tanh(x);
+  }
+
+  softmax(arr: number[]): number[] {
+    const max = Math.max(...arr);
+    const exp = arr.map(x => Math.exp(x - max));
+    const sum = exp.reduce((a, b) => a + b, 0);
+    return exp.map(x => x / sum);
+  }
+
+  predict(inputs: number[]): number[] {
+    let layer1 = Array(24).fill(0);
+    for (let i = 0; i < 24; i++) {
+      let sum = this.bias1[i];
+      for (let j = 0; j < inputs.length; j++) {
+        sum += inputs[j] * this.weights1[j][i];
+      }
+      layer1[i] = this.relu(sum);
+    }
+
+    let layer2 = Array(16).fill(0);
+    for (let i = 0; i < 16; i++) {
+      let sum = this.bias2[i];
+      for (let j = 0; j < layer1.length; j++) {
+        sum += layer1[j] * this.weights2[j][i];
+      }
+      layer2[i] = this.relu(sum);
+    }
+
+    let output = Array(4).fill(0);
+    for (let i = 0; i < 4; i++) {
+      let sum = this.bias3[i];
+      for (let j = 0; j < layer2.length; j++) {
+        sum += layer2[j] * this.weights3[j][i];
+      }
+      output[i] = sum;
+    }
+
+    return this.softmax(output);
+  }
+
+  mutate(rate: number = 0.1, strength: number = 0.3): NeuralNetwork {
+    const newNet = new NeuralNetwork(this);
+    
+    const mutateMatrix = (matrix: number[][]) => {
+      for (let i = 0; i < matrix.length; i++) {
+        for (let j = 0; j < matrix[i].length; j++) {
+          if (Math.random() < rate) {
+            matrix[i][j] += (Math.random() * 2 - 1) * strength;
+            matrix[i][j] = Math.max(-2, Math.min(2, matrix[i][j]));
+          }
+        }
+      }
+    };
+
+    const mutateArray = (arr: number[]) => {
+      for (let i = 0; i < arr.length; i++) {
+        if (Math.random() < rate) {
+          arr[i] += (Math.random() * 2 - 1) * strength;
+          arr[i] = Math.max(-2, Math.min(2, arr[i]));
+        }
+      }
+    };
+
+    mutateMatrix(newNet.weights1);
+    mutateMatrix(newNet.weights2);
+    mutateMatrix(newNet.weights3);
+    mutateArray(newNet.bias1);
+    mutateArray(newNet.bias2);
+    mutateArray(newNet.bias3);
+
+    return newNet;
+  }
+
+  crossover(other: NeuralNetwork): NeuralNetwork {
+    const child = new NeuralNetwork();
+    
+    const crossMatrix = (m1: number[][], m2: number[][], result: number[][]) => {
+      for (let i = 0; i < m1.length; i++) {
+        for (let j = 0; j < m1[i].length; j++) {
+          result[i][j] = Math.random() < 0.5 ? m1[i][j] : m2[i][j];
+        }
+      }
+    };
+
+    crossMatrix(this.weights1, other.weights1, child.weights1);
+    crossMatrix(this.weights2, other.weights2, child.weights2);
+    crossMatrix(this.weights3, other.weights3, child.weights3);
+
+    for (let i = 0; i < this.bias1.length; i++) {
+      child.bias1[i] = Math.random() < 0.5 ? this.bias1[i] : other.bias1[i];
+    }
+    for (let i = 0; i < this.bias2.length; i++) {
+      child.bias2[i] = Math.random() < 0.5 ? this.bias2[i] : other.bias2[i];
+    }
+    for (let i = 0; i < this.bias3.length; i++) {
+      child.bias3[i] = Math.random() < 0.5 ? this.bias3[i] : other.bias3[i];
+    }
+
+    return child;
+  }
+}
+
+export default function SnakeAI() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [gameState, setGameState] = useState<GameState>({
+    snake: [{ x: 10, y: 10 }],
+    food: { x: 15, y: 15 },
+    direction: 'RIGHT',
+    score: 0,
+    gameOver: false
+  });
+  
+  const [aiStats, setAiStats] = useState<AIStats>({
+    generation: 1,
+    bestScore: 0,
+    currentScore: 0,
+    gamesPlayed: 0,
+    averageScore: 0,
+    fitness: 0,
+    avgSurvivalTime: 0,
+    recentProgress: [],
+    learningTrend: '🤔 观察中...'
+  });
+
+  const [isTraining, setIsTraining] = useState(false);
+  const [speed, setSpeed] = useState(20);
+  const neuralNetRef = useRef(new NeuralNetwork());
+  const bestNetRef = useRef(new NeuralNetwork());
+  const gameHistoryRef = useRef<number[]>([]);
+  const stepsWithoutFoodRef = useRef(0);
+
+  const directions = ['UP', 'DOWN', 'LEFT', 'RIGHT'];
+
+  const getGameInputs = useCallback((state: GameState): number[] => {
+    const head = state.snake[0];
+    const food = state.food;
+    const inputs: number[] = [];
+
+    const foodDx = food.x - head.x;
+    const foodDy = food.y - head.y;
+    const foodDistance = Math.sqrt(foodDx * foodDx + foodDy * foodDy);
+
+    inputs.push(
+      head.x / GRID_SIZE,
+      head.y / GRID_SIZE,
+      food.x / GRID_SIZE,  
+      food.y / GRID_SIZE,
+      foodDx / GRID_SIZE,
+      foodDy / GRID_SIZE,
+      foodDistance / (GRID_SIZE * Math.sqrt(2)),
+      state.snake.length / (GRID_SIZE * GRID_SIZE)
+    );
+
+    const directions = [
+      { dx: 0, dy: -1, name: 'UP' },
+      { dx: 0, dy: 1, name: 'DOWN' }, 
+      { dx: -1, dy: 0, name: 'LEFT' },
+      { dx: 1, dy: 0, name: 'RIGHT' }
+    ];
+
+    for (const dir of directions) {
+      let distance = 1;
+      let foundWall = false, foundBody = false, foundFood = false;
+      
+      while (distance < GRID_SIZE) {
+        const checkX = head.x + dir.dx * distance;
+        const checkY = head.y + dir.dy * distance;
+        
+        if (checkX < 0 || checkX >= GRID_SIZE || checkY < 0 || checkY >= GRID_SIZE) {
+          foundWall = true;
+          break;
+        }
+        
+        if (state.snake.some(seg => seg.x === checkX && seg.y === checkY)) {
+          foundBody = true;
+          break;
+        }
+        
+        if (checkX === food.x && checkY === food.y) {
+          foundFood = true;
+          break;
+        }
+        
+        distance++;
+      }
+      
+      inputs.push(
+        foundWall ? distance / GRID_SIZE : 1,
+        foundBody ? distance / GRID_SIZE : 1, 
+        foundFood ? distance / GRID_SIZE : 0,
+        state.direction === dir.name ? 1 : 0
+      );
+    }
+
+    for (let i = 0; i < 8; i++) {
+      const angle = (i / 8) * 2 * Math.PI;
+      const dx = Math.cos(angle);
+      const dy = Math.sin(angle);
+      
+      let distance = 1;
+      while (distance < GRID_SIZE) {
+        const checkX = Math.round(head.x + dx * distance);
+        const checkY = Math.round(head.y + dy * distance);
+        
+        if (checkX < 0 || checkX >= GRID_SIZE || checkY < 0 || checkY >= GRID_SIZE ||
+            state.snake.some(seg => seg.x === checkX && seg.y === checkY)) {
+          break;
+        }
+        distance++;
+      }
+      
+      inputs.push(distance / GRID_SIZE);
+    }
+
+    return inputs.slice(0, 32);
+  }, []);
+
+  const generateFood = useCallback((snake: Position[]): Position => {
+    let newFood;
+    do {
+      newFood = {
+        x: Math.floor(Math.random() * GRID_SIZE),
+        y: Math.floor(Math.random() * GRID_SIZE)
+      };
+    } while (snake.some(segment => segment.x === newFood.x && segment.y === newFood.y));
+    return newFood;
+  }, []);
+
+  const moveSnake = useCallback((state: GameState): GameState => {
+    const head = { ...state.snake[0] };
+    
+    switch (state.direction) {
+      case 'UP': head.y -= 1; break;
+      case 'DOWN': head.y += 1; break;
+      case 'LEFT': head.x -= 1; break;
+      case 'RIGHT': head.x += 1; break;
+    }
+
+    if (head.x < 0 || head.x >= GRID_SIZE || head.y < 0 || head.y >= GRID_SIZE) {
+      return { ...state, gameOver: true };
+    }
+
+    if (state.snake.some(segment => segment.x === head.x && segment.y === head.y)) {
+      return { ...state, gameOver: true };
+    }
+
+    const newSnake = [head, ...state.snake];
+    let newFood = state.food;
+    let newScore = state.score;
+
+    if (head.x === state.food.x && head.y === state.food.y) {
+      newScore += 10;
+      newFood = generateFood(newSnake);
+      stepsWithoutFoodRef.current = 0;
+    } else {
+      newSnake.pop();
+      stepsWithoutFoodRef.current += 1;
+    }
+
+    if (stepsWithoutFoodRef.current > Math.max(40 + state.snake.length * 2, 60)) {
+      return { ...state, gameOver: true };
+    }
+
+    return {
+      ...state,
+      snake: newSnake,
+      food: newFood,
+      score: newScore,
+      gameOver: false
+    };
+  }, [generateFood]);
+
+  const evaluateDirection = useCallback((state: GameState, direction: string): number => {
+    const head = state.snake[0];
+    let newHead = { ...head };
+    
+    switch (direction) {
+      case 'UP': newHead.y -= 1; break;
+      case 'DOWN': newHead.y += 1; break;
+      case 'LEFT': newHead.x -= 1; break;
+      case 'RIGHT': newHead.x += 1; break;
+    }
+    
+    let score = 0;
+    
+    // 撞墙严重扣分
+    if (newHead.x < 0 || newHead.x >= GRID_SIZE || newHead.y < 0 || newHead.y >= GRID_SIZE) {
+      return -1000;
+    }
+    
+    // 撞自己严重扣分
+    if (state.snake.some(segment => segment.x === newHead.x && segment.y === newHead.y)) {
+      return -1000;
+    }
+    
+    // 反向移动扣分
+    const isOppositeDirection = 
+      (state.direction === 'UP' && direction === 'DOWN') ||
+      (state.direction === 'DOWN' && direction === 'UP') ||
+      (state.direction === 'LEFT' && direction === 'RIGHT') ||
+      (state.direction === 'RIGHT' && direction === 'LEFT');
+    if (isOppositeDirection) score -= 500;
+    
+    // 离墙太近扣分
+    const distToWall = Math.min(newHead.x, GRID_SIZE - 1 - newHead.x, newHead.y, GRID_SIZE - 1 - newHead.y);
+    if (distToWall <= 1) score -= 100;
+    if (distToWall <= 2) score -= 50;
+    
+    // 朝向食物加分
+    const foodDx = state.food.x - newHead.x;
+    const foodDy = state.food.y - newHead.y;
+    const oldFoodDx = state.food.x - head.x;
+    const oldFoodDy = state.food.y - head.y;
+    
+    const newDist = Math.abs(foodDx) + Math.abs(foodDy);
+    const oldDist = Math.abs(oldFoodDx) + Math.abs(oldFoodDy);
+    
+    if (newDist < oldDist) score += 100;
+    else if (newDist > oldDist) score -= 50;
+    
+    // 检查前方几步是否安全
+    for (let i = 2; i <= 4; i++) {
+      let checkHead = { ...newHead };
+      switch (direction) {
+        case 'UP': checkHead.y -= i; break;
+        case 'DOWN': checkHead.y += i; break;
+        case 'LEFT': checkHead.x -= i; break;
+        case 'RIGHT': checkHead.x += i; break;
+      }
+      
+      if (checkHead.x < 0 || checkHead.x >= GRID_SIZE || checkHead.y < 0 || checkHead.y >= GRID_SIZE) {
+        score -= 20 / i;
+      }
+      
+      if (state.snake.some(segment => segment.x === checkHead.x && segment.y === checkHead.y)) {
+        score -= 30 / i;
+      }
+    }
+    
+    return score;
+  }, []);
+
+  const getAIDirection = useCallback((state: GameState): string => {
+    const inputs = getGameInputs(state);
+    const outputs = neuralNetRef.current.predict(inputs);
+    
+    const directionScores = directions.map((dir, index) => ({
+      dir,
+      aiScore: outputs[index] * 100,
+      safetyScore: evaluateDirection(state, dir),
+      totalScore: 0
+    }));
+    
+    // 组合AI决策和安全评估
+    directionScores.forEach(d => {
+      d.totalScore = d.aiScore + d.safetyScore;
+    });
+    
+    // 过滤出安全方向
+    const safeDirs = directionScores.filter(d => d.safetyScore > -500);
+    
+    if (safeDirs.length === 0) {
+      // 紧急情况，选择最不坏的选项
+      const leastBad = directionScores.reduce((best, current) => 
+        current.safetyScore > best.safetyScore ? current : best
+      );
+      return leastBad.dir;
+    }
+    
+    // 选择总分最高的安全方向
+    const bestDirection = safeDirs.reduce((best, current) => 
+      current.totalScore > best.totalScore ? current : best
+    );
+    
+    return bestDirection.dir;
+  }, [getGameInputs, evaluateDirection]);
+
+  const resetGame = useCallback(() => {
+    const initialState = {
+      snake: [{ x: Math.floor(GRID_SIZE / 2), y: Math.floor(GRID_SIZE / 2) }],
+      food: { x: 0, y: 0 },
+      direction: 'RIGHT',
+      score: 0,
+      gameOver: false
+    };
+    initialState.food = generateFood(initialState.snake);
+    stepsWithoutFoodRef.current = 0;
+    gameStartTimeRef.current = Date.now();
+    return initialState;
+  }, [generateFood]);
+
+  const drawGame = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+    const cellSize = CANVAS_SIZE / GRID_SIZE;
+
+    ctx.fillStyle = '#0f0';
+    gameState.snake.forEach((segment, index) => {
+      ctx.fillStyle = index === 0 ? '#0a0' : '#0f0';
+      ctx.fillRect(segment.x * cellSize, segment.y * cellSize, cellSize - 1, cellSize - 1);
+    });
+
+    ctx.fillStyle = '#f00';
+    ctx.fillRect(gameState.food.x * cellSize, gameState.food.y * cellSize, cellSize - 1, cellSize - 1);
+  }, [gameState]);
+
+  const populationRef = useRef<NeuralNetwork[]>([]);
+  const generationRef = useRef(0);
+  const fitnessHistoryRef = useRef<number[]>([]);
+  const survivalTimeRef = useRef<number[]>([]);
+  const gameStartTimeRef = useRef(0);
+
+  const previousDistanceRef = useRef(0);
+  const currentRewardRef = useRef(0);
+
+  const calculateFitness = useCallback((score: number, steps: number, snake: Position[], currentDistance: number): number => {
+    const survivalBonus = Math.min(steps / 5, 100);
+    const lengthBonus = (snake.length - 1) * 50;
+    const scoreBonus = score * 200;
+    const efficiencyBonus = score > 0 ? (score / Math.max(steps / 50, 1)) * 20 : 0;
+    
+    const distancePenalty = Math.max(0, steps - score * 30) * -1;
+    const stagnationPenalty = stepsWithoutFoodRef.current > 25 ? -stepsWithoutFoodRef.current * 2 : 0;
+    
+    // 长度奖励递增
+    const lengthMultiplier = snake.length > 5 ? Math.pow(1.2, snake.length - 5) : 1;
+    
+    return (scoreBonus + lengthBonus * lengthMultiplier + survivalBonus + efficiencyBonus + distancePenalty + stagnationPenalty + currentRewardRef.current) * (snake.length > 10 ? 2 : 1);
+  }, []);
+
+  const updateRealtimeRewards = useCallback((state: GameState) => {
+    const head = state.snake[0];
+    const food = state.food;
+    const currentDistance = Math.abs(head.x - food.x) + Math.abs(head.y - food.y);
+    
+    if (previousDistanceRef.current > 0) {
+      if (currentDistance < previousDistanceRef.current) {
+        currentRewardRef.current += 5;
+      } else if (currentDistance > previousDistanceRef.current) {
+        currentRewardRef.current -= 2;
+      }
+    }
+    
+    if (stepsWithoutFoodRef.current > 20) {
+      currentRewardRef.current -= 0.5;
+    }
+    
+    if (stepsWithoutFoodRef.current > 50) {
+      currentRewardRef.current -= 2;
+    }
+    
+    previousDistanceRef.current = currentDistance;
+  }, []);
+
+  const evolveAI = useCallback(() => {
+    const currentScore = gameState.score;
+    const head = gameState.snake[0];
+    const food = gameState.food;
+    const currentDistance = Math.abs(head.x - food.x) + Math.abs(head.y - food.y);
+    const survivalTime = Date.now() - gameStartTimeRef.current;
+    const fitness = calculateFitness(currentScore, stepsWithoutFoodRef.current + currentScore * 10, gameState.snake, currentDistance);
+    
+    neuralNetRef.current.fitness = fitness;
+    gameHistoryRef.current.push(currentScore);
+    fitnessHistoryRef.current.push(fitness);
+    survivalTimeRef.current.push(survivalTime);
+    
+    previousDistanceRef.current = 0;
+    currentRewardRef.current = 0;
+    
+    if (currentScore > aiStats.bestScore) {
+      bestNetRef.current = new NeuralNetwork(neuralNetRef.current);
+      setAiStats(prev => ({ ...prev, bestScore: currentScore }));
+    }
+
+    if (populationRef.current.length < 20) {
+      populationRef.current.push(new NeuralNetwork(neuralNetRef.current));
+    } else {
+      populationRef.current[generationRef.current % 20] = new NeuralNetwork(neuralNetRef.current);
+    }
+
+    if (gameHistoryRef.current.length >= 5) {
+      const recentFitness = fitnessHistoryRef.current.slice(-5);
+      const avgFitness = recentFitness.reduce((a, b) => a + b, 0) / recentFitness.length;
+      const avgScore = gameHistoryRef.current.slice(-5).reduce((a, b) => a + b, 0) / 5;
+
+      populationRef.current.sort((a, b) => (b.fitness || 0) - (a.fitness || 0));
+      
+      if (populationRef.current.length >= 10) {
+        const parent1 = populationRef.current[0];
+        const parent2 = populationRef.current[1];
+        
+        if (Math.random() < 0.7 && parent1 && parent2) {
+          neuralNetRef.current = parent1.crossover(parent2).mutate(0.15, 0.4);
+        } else if (avgFitness < (fitnessHistoryRef.current.slice(-20, -5).reduce((a, b) => a + b, 0) / 15) * 0.8) {
+          neuralNetRef.current = bestNetRef.current.mutate(0.3, 0.6);
+        } else {
+          neuralNetRef.current = bestNetRef.current.mutate(0.1, 0.3);
+        }
+      } else {
+        neuralNetRef.current = bestNetRef.current.mutate(0.2, 0.5);
+      }
+
+      generationRef.current++;
+      
+      // 计算学习趋势
+      const recentScores = gameHistoryRef.current.slice(-20);
+      const recentSurvival = survivalTimeRef.current.slice(-10).map(t => t / 1000);
+      const avgSurvivalTime = recentSurvival.reduce((a, b) => a + b, 0) / recentSurvival.length;
+      
+      let learningTrend = '🤔 观察中...';
+      if (recentScores.length >= 10) {
+        const firstHalf = recentScores.slice(0, Math.floor(recentScores.length / 2));
+        const secondHalf = recentScores.slice(Math.floor(recentScores.length / 2));
+        const firstAvg = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+        const secondAvg = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
+        
+        if (secondAvg > firstAvg * 1.2) learningTrend = '🚀 快速学习中！';
+        else if (secondAvg > firstAvg * 1.05) learningTrend = '📈 稳步改进';
+        else if (secondAvg > firstAvg * 0.95) learningTrend = '🔄 缓慢进步';
+        else learningTrend = '😵 可能退化了...';
+      }
+      
+      setAiStats(prev => ({
+        ...prev,
+        generation: generationRef.current,
+        gamesPlayed: prev.gamesPlayed + 1,
+        averageScore: avgScore,
+        currentScore: 0,
+        fitness: avgFitness,
+        avgSurvivalTime: avgSurvivalTime,
+        recentProgress: recentScores.slice(-10),
+        learningTrend
+      }));
+    }
+  }, [gameState.score, gameState.snake, aiStats.bestScore, calculateFitness]);
+
+  useEffect(() => {
+    drawGame();
+  }, [drawGame]);
+
+  useEffect(() => {
+    if (!isTraining) return;
+
+    const gameLoop = setInterval(() => {
+      setGameState(prevState => {
+        if (prevState.gameOver) {
+          evolveAI();
+          return resetGame();
+        }
+
+        updateRealtimeRewards(prevState);
+        const aiDirection = getAIDirection(prevState);
+        const newState = { ...prevState, direction: aiDirection };
+        const movedState = moveSnake(newState);
+        
+        setAiStats(prev => ({
+          ...prev,
+          currentScore: movedState.score
+        }));
+
+        return movedState;
+      });
+    }, 1000 / speed);
+
+    return () => clearInterval(gameLoop);
+  }, [isTraining, speed, getAIDirection, moveSnake, resetGame, evolveAI]);
+
+  return (
+    <div className="min-h-screen bg-gray-900 text-white p-8">
+      <div className="max-w-6xl mx-auto">
+        <h1 className="text-4xl font-bold text-center mb-8">🐍 AI贪吃蛇进化实验</h1>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="bg-gray-800 rounded-lg p-6">
+            <h2 className="text-2xl font-bold mb-4">🎮 游戏画面</h2>
+            <canvas
+              ref={canvasRef}
+              width={CANVAS_SIZE}
+              height={CANVAS_SIZE}
+              className="border-2 border-gray-600 rounded-lg mx-auto block"
+            />
+            
+            <div className="mt-4 flex flex-col gap-4">
+              <div className="flex gap-4">
+                <button
+                  onClick={() => setIsTraining(!isTraining)}
+                  className={`px-6 py-3 rounded-lg font-bold ${
+                    isTraining 
+                      ? 'bg-red-600 hover:bg-red-700' 
+                      : 'bg-green-600 hover:bg-green-700'
+                  }`}
+                >
+                  {isTraining ? '⏸️ 停止训练' : '▶️ 开始训练'}
+                </button>
+                
+                <button
+                  onClick={() => {
+                    setGameState(resetGame());
+                    setAiStats({
+                      generation: 1,
+                      bestScore: 0,
+                      currentScore: 0,
+                      gamesPlayed: 0,
+                      averageScore: 0,
+                      fitness: 0,
+                      avgSurvivalTime: 0,
+                      recentProgress: [],
+                      learningTrend: '🤔 观察中...'
+                    });
+                    gameHistoryRef.current = [];
+                  }}
+                  className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-bold"
+                >
+                  🔄 重置
+                </button>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  训练速度: {speed}x
+                </label>
+                <input
+                  type="range"
+                  min="1"
+                  max="4000"
+                  value={speed}
+                  onChange={(e) => setSpeed(Number(e.target.value))}
+                  className="w-full"
+                />
+                <div className="flex justify-between text-xs text-gray-400 mt-1">
+                  <span>1x</span>
+                  <span>1000x</span>
+                  <span>2000x</span>
+                  <span>4000x</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-gray-800 rounded-lg p-6">
+            <h2 className="text-2xl font-bold mb-4">📊 AI进化统计</h2>
+            
+            <div className="space-y-4">
+              <div className="bg-gray-700 rounded-lg p-4">
+                <h3 className="text-lg font-bold text-green-400">当前状态</h3>
+                <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
+                  <div>世代: <span className="font-bold">{aiStats.generation}</span></div>
+                  <div>当前分数: <span className="font-bold">{aiStats.currentScore}</span></div>
+                  <div>游戏状态: <span className="font-bold">{gameState.gameOver ? '💀 死亡' : '🟢 存活'}</span></div>
+                  <div>训练状态: <span className="font-bold">{isTraining ? '🚀 训练中' : '⏸️ 暂停'}</span></div>
+                </div>
+                <div className="mt-3 p-2 bg-gray-600 rounded text-center">
+                  <div className="text-sm font-bold">学习趋势</div>
+                  <div className="text-lg">{aiStats.learningTrend}</div>
+                </div>
+              </div>
+
+              <div className="bg-gray-700 rounded-lg p-4">
+                <h3 className="text-lg font-bold text-blue-400">历史最佳</h3>
+                <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
+                  <div>最高分数: <span className="font-bold text-yellow-400">{aiStats.bestScore}</span></div>
+                  <div>游戏场数: <span className="font-bold">{aiStats.gamesPlayed}</span></div>
+                  <div>平均分数: <span className="font-bold">{aiStats.averageScore.toFixed(1)}</span></div>
+                  <div>适应度: <span className="font-bold">{aiStats.fitness.toFixed(1)}</span></div>
+                  <div>平均存活: <span className="font-bold">{aiStats.avgSurvivalTime.toFixed(1)}秒</span></div>
+                  <div>最近10局: <span className="font-bold">[{aiStats.recentProgress.join(', ')}]</span></div>
+                </div>
+              </div>
+
+              <div className="bg-gray-700 rounded-lg p-4">
+                <h3 className="text-lg font-bold text-purple-400">蛇的信息</h3>
+                <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
+                  <div>蛇身长度: <span className="font-bold">{gameState.snake.length}</span></div>
+                  <div>移动方向: <span className="font-bold">{gameState.direction}</span></div>
+                  <div>头部位置: <span className="font-bold">({gameState.snake[0]?.x}, {gameState.snake[0]?.y})</span></div>
+                  <div>食物位置: <span className="font-bold">({gameState.food.x}, {gameState.food.y})</span></div>
+                </div>
+              </div>
+
+              <div className="bg-gray-700 rounded-lg p-4">
+                <h3 className="text-lg font-bold text-orange-400">AI学习原理</h3>
+                <div className="text-sm space-y-2">
+                  <p>🧠 神经网络: 24输入 → 16隐层 → 4输出</p>
+                  <p>🔄 进化算法: 表现好的网络变异继续训练</p>
+                  <p>🎯 奖励机制: 吃到食物+10分, 生存时间越长越好</p>
+                  <p>⚡ 变异率: 表现差时10%变异, 表现好时5%变异</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-8 bg-gray-800 rounded-lg p-6">
+          <h2 className="text-2xl font-bold mb-4">📈 训练进度可视化</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-gray-700 rounded-lg p-4">
+              <h4 className="font-bold text-center">当前分数</h4>
+              <div className="text-3xl font-bold text-center text-green-400 mt-2">
+                {aiStats.currentScore}
+              </div>
+              <div className="w-full bg-gray-600 rounded-full h-2 mt-2">
+                <div 
+                  className="bg-green-400 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${Math.min((aiStats.currentScore / Math.max(aiStats.bestScore, 1)) * 100, 100)}%` }}
+                ></div>
+              </div>
+            </div>
+            
+            <div className="bg-gray-700 rounded-lg p-4">
+              <h4 className="font-bold text-center">历史最高</h4>
+              <div className="text-3xl font-bold text-center text-yellow-400 mt-2">
+                {aiStats.bestScore}
+              </div>
+              <div className="text-center text-sm text-gray-400 mt-2">
+                世代 #{aiStats.generation}
+              </div>
+            </div>
+            
+            <div className="bg-gray-700 rounded-lg p-4">
+              <h4 className="font-bold text-center">平均表现</h4>
+              <div className="text-3xl font-bold text-center text-blue-400 mt-2">
+                {aiStats.averageScore.toFixed(1)}
+              </div>
+              <div className="text-center text-sm text-gray-400 mt-2">
+                最近10局平均
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
