@@ -216,6 +216,7 @@ export default function SnakeAI() {
     const foodDy = food.y - head.y;
     const foodDistance = Math.sqrt(foodDx * foodDx + foodDy * foodDy);
 
+    // 基础位置信息
     inputs.push(
       head.x / GRID_SIZE,
       head.y / GRID_SIZE,
@@ -227,6 +228,19 @@ export default function SnakeAI() {
       state.snake.length / (GRID_SIZE * GRID_SIZE)
     );
 
+    // 增强身体感知：检查身体段的密度和分布
+    const bodyDensityAround = [];
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dy = -2; dy <= 2; dy++) {
+        if (dx === 0 && dy === 0) continue;
+        const checkX = head.x + dx;
+        const checkY = head.y + dy;
+        const hasBody = state.snake.some(seg => seg.x === checkX && seg.y === checkY);
+        bodyDensityAround.push(hasBody ? 1 : 0);
+      }
+    }
+    inputs.push(...bodyDensityAround.slice(0, 8)); // 只取前8个最重要的
+
     const directions = [
       { dx: 0, dy: -1, name: 'UP' },
       { dx: 0, dy: 1, name: 'DOWN' }, 
@@ -234,58 +248,51 @@ export default function SnakeAI() {
       { dx: 1, dy: 0, name: 'RIGHT' }
     ];
 
+    // 多步路径安全检查
     for (const dir of directions) {
-      let distance = 1;
-      let foundWall = false, foundBody = false, foundFood = false;
+      let safeSteps = 0;
+      let foundFood = false;
       
-      while (distance < GRID_SIZE) {
-        const checkX = head.x + dir.dx * distance;
-        const checkY = head.y + dir.dy * distance;
+      // 检查这个方向上连续几步都安全
+      for (let step = 1; step <= 5; step++) {
+        const checkX = head.x + dir.dx * step;
+        const checkY = head.y + dir.dy * step;
         
         if (checkX < 0 || checkX >= GRID_SIZE || checkY < 0 || checkY >= GRID_SIZE) {
-          foundWall = true;
           break;
         }
         
         if (state.snake.some(seg => seg.x === checkX && seg.y === checkY)) {
-          foundBody = true;
           break;
         }
+        
+        safeSteps = step;
         
         if (checkX === food.x && checkY === food.y) {
           foundFood = true;
           break;
         }
-        
-        distance++;
       }
       
       inputs.push(
-        foundWall ? distance / GRID_SIZE : 1,
-        foundBody ? distance / GRID_SIZE : 1, 
-        foundFood ? distance / GRID_SIZE : 0,
-        state.direction === dir.name ? 1 : 0
+        safeSteps / 5.0, // 安全步数比例
+        foundFood ? 1 : 0, // 这个方向能到食物
+        state.direction === dir.name ? 1 : 0 // 当前方向
       );
     }
 
-    for (let i = 0; i < 8; i++) {
-      const angle = (i / 8) * 2 * Math.PI;
-      const dx = Math.cos(angle);
-      const dy = Math.sin(angle);
-      
-      let distance = 1;
-      while (distance < GRID_SIZE) {
-        const checkX = Math.round(head.x + dx * distance);
-        const checkY = Math.round(head.y + dy * distance);
-        
-        if (checkX < 0 || checkX >= GRID_SIZE || checkY < 0 || checkY >= GRID_SIZE ||
-            state.snake.some(seg => seg.x === checkX && seg.y === checkY)) {
-          break;
-        }
-        distance++;
-      }
-      
-      inputs.push(distance / GRID_SIZE);
+    // 检查尾巴位置 - 避免"咬尾巴"
+    if (state.snake.length > 3) {
+      const tail = state.snake[state.snake.length - 1];
+      const secondTail = state.snake[state.snake.length - 2];
+      inputs.push(
+        Math.abs(head.x - tail.x) / GRID_SIZE,
+        Math.abs(head.y - tail.y) / GRID_SIZE,
+        Math.abs(head.x - secondTail.x) / GRID_SIZE,
+        Math.abs(head.y - secondTail.y) / GRID_SIZE
+      );
+    } else {
+      inputs.push(0, 0, 0, 0);
     }
 
     return inputs.slice(0, 32);
