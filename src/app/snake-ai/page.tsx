@@ -7,10 +7,12 @@ interface Position {
   y: number;
 }
 
+type Direction = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT';
+
 interface GameState {
   snake: Position[];
   food: Position;
-  direction: string;
+  direction: Direction;
   score: number;
   gameOver: boolean;
 }
@@ -29,6 +31,19 @@ interface AIStats {
 
 const GRID_SIZE = 20;
 const CANVAS_SIZE = 400;
+const DIRECTIONS: Direction[] = ['UP', 'DOWN', 'LEFT', 'RIGHT'];
+const DIRECTION_OFFSETS: Record<Direction, { dx: number; dy: number }> = {
+  UP: { dx: 0, dy: -1 },
+  DOWN: { dx: 0, dy: 1 },
+  LEFT: { dx: -1, dy: 0 },
+  RIGHT: { dx: 1, dy: 0 }
+};
+const OPPOSITE_DIRECTION: Record<Direction, Direction> = {
+  UP: 'DOWN',
+  DOWN: 'UP',
+  LEFT: 'RIGHT',
+  RIGHT: 'LEFT'
+};
 
 class NeuralNetwork {
   weights1: number[][];
@@ -211,12 +226,11 @@ export default function SnakeAI() {
   const gameHistoryRef = useRef<number[]>([]);
   const stepsWithoutFoodRef = useRef(0);
 
-  const directions = ['UP', 'DOWN', 'LEFT', 'RIGHT'];
-
   const getGameInputs = useCallback((state: GameState): number[] => {
     const head = state.snake[0];
     const food = state.food;
     const inputs: number[] = [];
+    const snakeSet = new Set(state.snake.map(seg => `${seg.x},${seg.y}`));
 
     const foodDx = food.x - head.x;
     const foodDy = food.y - head.y;
@@ -241,49 +255,43 @@ export default function SnakeAI() {
         if (dx === 0 && dy === 0) continue;
         const checkX = head.x + dx;
         const checkY = head.y + dy;
-        const hasBody = state.snake.some(seg => seg.x === checkX && seg.y === checkY);
+        const hasBody = snakeSet.has(`${checkX},${checkY}`);
         bodyDensityAround.push(hasBody ? 1 : 0);
       }
     }
     inputs.push(...bodyDensityAround.slice(0, 8)); // 只取前8个最重要的
 
-    const directions = [
-      { dx: 0, dy: -1, name: 'UP' },
-      { dx: 0, dy: 1, name: 'DOWN' }, 
-      { dx: -1, dy: 0, name: 'LEFT' },
-      { dx: 1, dy: 0, name: 'RIGHT' }
-    ];
-
     // 多步路径安全检查
-    for (const dir of directions) {
+    for (const dir of DIRECTIONS) {
+      const offset = DIRECTION_OFFSETS[dir];
       let safeSteps = 0;
       let foundFood = false;
-      
+
       // 检查这个方向上连续几步都安全
       for (let step = 1; step <= 5; step++) {
-        const checkX = head.x + dir.dx * step;
-        const checkY = head.y + dir.dy * step;
-        
+        const checkX = head.x + offset.dx * step;
+        const checkY = head.y + offset.dy * step;
+
         if (checkX < 0 || checkX >= GRID_SIZE || checkY < 0 || checkY >= GRID_SIZE) {
           break;
         }
-        
-        if (state.snake.some(seg => seg.x === checkX && seg.y === checkY)) {
+
+        if (snakeSet.has(`${checkX},${checkY}`)) {
           break;
         }
-        
+
         safeSteps = step;
-        
+
         if (checkX === food.x && checkY === food.y) {
           foundFood = true;
           break;
         }
       }
-      
+
       inputs.push(
         safeSteps / 5.0, // 安全步数比例
         foundFood ? 1 : 0, // 这个方向能到食物
-        state.direction === dir.name ? 1 : 0 // 当前方向
+        state.direction === dir ? 1 : 0 // 当前方向
       );
     }
 
@@ -317,13 +325,9 @@ export default function SnakeAI() {
 
   const moveSnake = useCallback((state: GameState): GameState => {
     const head = { ...state.snake[0] };
-
-    switch (state.direction) {
-      case 'UP': head.y -= 1; break;
-      case 'DOWN': head.y += 1; break;
-      case 'LEFT': head.x -= 1; break;
-      case 'RIGHT': head.x += 1; break;
-    }
+    const offset = DIRECTION_OFFSETS[state.direction];
+    head.x += offset.dx;
+    head.y += offset.dy;
 
     if (head.x < 0 || head.x >= GRID_SIZE || head.y < 0 || head.y >= GRID_SIZE) {
       return { ...state, gameOver: true };
@@ -361,16 +365,10 @@ export default function SnakeAI() {
     };
   }, [generateFood]);
 
-  const evaluateDirection = useCallback((state: GameState, direction: string): number => {
+  const evaluateDirection = useCallback((state: GameState, direction: Direction): number => {
     const head = state.snake[0];
-    const newHead = { ...head };
-
-    switch (direction) {
-      case 'UP': newHead.y -= 1; break;
-      case 'DOWN': newHead.y += 1; break;
-      case 'LEFT': newHead.x -= 1; break;
-      case 'RIGHT': newHead.x += 1; break;
-    }
+    const offset = DIRECTION_OFFSETS[direction];
+    const newHead = { x: head.x + offset.dx, y: head.y + offset.dy };
     
     let score = 0;
     
@@ -388,12 +386,7 @@ export default function SnakeAI() {
     }
 
     // 反向移动扣分
-    const isOppositeDirection =
-      (state.direction === 'UP' && direction === 'DOWN') ||
-      (state.direction === 'DOWN' && direction === 'UP') ||
-      (state.direction === 'LEFT' && direction === 'RIGHT') ||
-      (state.direction === 'RIGHT' && direction === 'LEFT');
-    if (isOppositeDirection) return -1500;
+    if (OPPOSITE_DIRECTION[state.direction] === direction) return -1500;
 
     const futureSnake = willEat
       ? [newHead, ...state.snake]
@@ -429,17 +422,12 @@ export default function SnakeAI() {
     // 长期路径规划 - 检查前方5步的安全性
     let continuousSteps = 0;
     for (let step = 1; step <= 5; step++) {
-      const checkHead = { ...newHead };
-      switch (direction) {
-        case 'UP': checkHead.y -= step; break;
-        case 'DOWN': checkHead.y += step; break;
-        case 'LEFT': checkHead.x -= step; break;
-        case 'RIGHT': checkHead.x += step; break;
-      }
+      const checkX = newHead.x + offset.dx * step;
+      const checkY = newHead.y + offset.dy * step;
 
-      if (checkHead.x < 0 || checkHead.x >= GRID_SIZE ||
-          checkHead.y < 0 || checkHead.y >= GRID_SIZE ||
-          futureSnakeSet.has(`${checkHead.x},${checkHead.y}`)) {
+      if (checkX < 0 || checkX >= GRID_SIZE ||
+          checkY < 0 || checkY >= GRID_SIZE ||
+          futureSnakeSet.has(`${checkX},${checkY}`)) {
         break;
       }
       continuousSteps++;
@@ -457,7 +445,7 @@ export default function SnakeAI() {
     }
     
     return score;
-  }, []);
+  }, [calculateFreeSpace, calculateTrapRisk]);
 
   const calculateFreeSpace = useCallback((pos: Position, snake: Position[]): number => {
     let freeCount = 0;
@@ -495,25 +483,30 @@ export default function SnakeAI() {
 
   const calculateTrapRisk = useCallback((pos: Position, snake: Position[]): number => {
     let surroundingBodyCount = 0;
+    const snakeSet = new Set(snake.map(seg => `${seg.x},${seg.y}`));
     const checkPositions = [
       {x: pos.x + 1, y: pos.y}, {x: pos.x - 1, y: pos.y},
       {x: pos.x, y: pos.y + 1}, {x: pos.x, y: pos.y - 1},
       {x: pos.x + 1, y: pos.y + 1}, {x: pos.x - 1, y: pos.y - 1},
       {x: pos.x + 1, y: pos.y - 1}, {x: pos.x - 1, y: pos.y + 1}
     ];
-    
+
     for (const checkPos of checkPositions) {
-      if (checkPos.x < 0 || checkPos.x >= GRID_SIZE || 
-          checkPos.y < 0 || checkPos.y >= GRID_SIZE ||
-          snake.some(seg => seg.x === checkPos.x && seg.y === checkPos.y)) {
+      if (checkPos.x < 0 || checkPos.x >= GRID_SIZE ||
+          checkPos.y < 0 || checkPos.y >= GRID_SIZE) {
+        surroundingBodyCount++;
+        continue;
+      }
+
+      if (snakeSet.has(`${checkPos.x},${checkPos.y}`)) {
         surroundingBodyCount++;
       }
     }
-    
+
     return surroundingBodyCount / 8.0; // 返回0-1的风险值
   }, []);
 
-  const getAIDirection = useCallback((state: GameState): string => {
+  const getAIDirection = useCallback((state: GameState): Direction => {
     const inputs = getGameInputs(state);
     const outputs = neuralNetRef.current.predict(inputs);
     
@@ -523,7 +516,7 @@ export default function SnakeAI() {
     const trapRisk = calculateTrapRisk(head, state.snake);
     const safetyMode = freeSpace < 4 || trapRisk > 0.5;
     
-    const directionScores = directions.map((dir, index) => ({
+    const directionScores = DIRECTIONS.map((dir, index) => ({
       dir,
       aiScore: outputs[index] * 100,
       safetyScore: evaluateDirection(state, dir),
@@ -538,7 +531,7 @@ export default function SnakeAI() {
     // 过滤出安全方向
     const safeDirs = directionScores.filter(d => d.safetyScore > -500);
     
-    let chosenDirection;
+    let chosenDirection: Direction = state.direction;
     let decision = '';
     
     if (safeDirs.length === 0) {
