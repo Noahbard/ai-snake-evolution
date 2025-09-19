@@ -84,7 +84,7 @@ class NeuralNetwork {
   }
 
   predict(inputs: number[]): number[] {
-    let layer1 = Array(24).fill(0);
+    const layer1 = Array(24).fill(0);
     for (let i = 0; i < 24; i++) {
       let sum = this.bias1[i];
       for (let j = 0; j < inputs.length; j++) {
@@ -93,7 +93,7 @@ class NeuralNetwork {
       layer1[i] = this.relu(sum);
     }
 
-    let layer2 = Array(16).fill(0);
+    const layer2 = Array(16).fill(0);
     for (let i = 0; i < 16; i++) {
       let sum = this.bias2[i];
       for (let j = 0; j < layer1.length; j++) {
@@ -102,7 +102,7 @@ class NeuralNetwork {
       layer2[i] = this.relu(sum);
     }
 
-    let output = Array(4).fill(0);
+    const output = Array(4).fill(0);
     for (let i = 0; i < 4; i++) {
       let sum = this.bias3[i];
       for (let j = 0; j < layer2.length; j++) {
@@ -317,7 +317,7 @@ export default function SnakeAI() {
 
   const moveSnake = useCallback((state: GameState): GameState => {
     const head = { ...state.snake[0] };
-    
+
     switch (state.direction) {
       case 'UP': head.y -= 1; break;
       case 'DOWN': head.y += 1; break;
@@ -329,7 +329,10 @@ export default function SnakeAI() {
       return { ...state, gameOver: true };
     }
 
-    if (state.snake.some(segment => segment.x === head.x && segment.y === head.y)) {
+    const willEat = head.x === state.food.x && head.y === state.food.y;
+    const bodyToCheck = willEat ? state.snake : state.snake.slice(0, -1);
+
+    if (bodyToCheck.some(segment => segment.x === head.x && segment.y === head.y)) {
       return { ...state, gameOver: true };
     }
 
@@ -337,7 +340,7 @@ export default function SnakeAI() {
     let newFood = state.food;
     let newScore = state.score;
 
-    if (head.x === state.food.x && head.y === state.food.y) {
+    if (willEat) {
       newScore += 10;
       newFood = generateFood(newSnake);
       stepsWithoutFoodRef.current = 0;
@@ -360,8 +363,8 @@ export default function SnakeAI() {
 
   const evaluateDirection = useCallback((state: GameState, direction: string): number => {
     const head = state.snake[0];
-    let newHead = { ...head };
-    
+    const newHead = { ...head };
+
     switch (direction) {
       case 'UP': newHead.y -= 1; break;
       case 'DOWN': newHead.y += 1; break;
@@ -376,25 +379,33 @@ export default function SnakeAI() {
       return -2000;
     }
     
+    const willEat = newHead.x === state.food.x && newHead.y === state.food.y;
+    const bodyToCheck = willEat ? state.snake : state.snake.slice(0, -1);
+
     // 撞自己严重扣分
-    if (state.snake.some(segment => segment.x === newHead.x && segment.y === newHead.y)) {
+    if (bodyToCheck.some(segment => segment.x === newHead.x && segment.y === newHead.y)) {
       return -2000;
     }
-    
+
     // 反向移动扣分
-    const isOppositeDirection = 
+    const isOppositeDirection =
       (state.direction === 'UP' && direction === 'DOWN') ||
       (state.direction === 'DOWN' && direction === 'UP') ||
       (state.direction === 'LEFT' && direction === 'RIGHT') ||
       (state.direction === 'RIGHT' && direction === 'LEFT');
     if (isOppositeDirection) return -1500;
-    
+
+    const futureSnake = willEat
+      ? [newHead, ...state.snake]
+      : [newHead, ...state.snake.slice(0, -1)];
+    const futureSnakeSet = new Set(futureSnake.map(seg => `${seg.x},${seg.y}`));
+
     // 空间感知 - 评估移动后的可用空间
-    const freeSpaceAfterMove = calculateFreeSpace(newHead, state.snake);
+    const freeSpaceAfterMove = calculateFreeSpace(newHead, futureSnake);
     score += freeSpaceAfterMove * 10;
-    
+
     // 身体陷阱检测 - 检查是否会被自己身体包围
-    const trapRisk = calculateTrapRisk(newHead, state.snake);
+    const trapRisk = calculateTrapRisk(newHead, futureSnake);
     score -= trapRisk * 200;
     
     // 食物追逐策略 - 但不能过于激进
@@ -418,27 +429,27 @@ export default function SnakeAI() {
     // 长期路径规划 - 检查前方5步的安全性
     let continuousSteps = 0;
     for (let step = 1; step <= 5; step++) {
-      let checkHead = { ...newHead };
+      const checkHead = { ...newHead };
       switch (direction) {
         case 'UP': checkHead.y -= step; break;
         case 'DOWN': checkHead.y += step; break;
         case 'LEFT': checkHead.x -= step; break;
         case 'RIGHT': checkHead.x += step; break;
       }
-      
-      if (checkHead.x < 0 || checkHead.x >= GRID_SIZE || 
+
+      if (checkHead.x < 0 || checkHead.x >= GRID_SIZE ||
           checkHead.y < 0 || checkHead.y >= GRID_SIZE ||
-          state.snake.some(segment => segment.x === checkHead.x && segment.y === checkHead.y)) {
+          futureSnakeSet.has(`${checkHead.x},${checkHead.y}`)) {
         break;
       }
       continuousSteps++;
     }
-    
+
     score += continuousSteps * 30; // 能走得越远越好
-    
+
     // 尾巴跟随策略 - 有时跟着尾巴走是安全的
-    if (state.snake.length > 4) {
-      const tail = state.snake[state.snake.length - 1];
+    if (futureSnake.length > 4) {
+      const tail = futureSnake[futureSnake.length - 1];
       const distToTail = Math.abs(newHead.x - tail.x) + Math.abs(newHead.y - tail.y);
       if (distToTail <= 2 && freeSpaceAfterMove < 4) {
         score += 60; // 靠近尾巴在狭窄空间是好策略
@@ -452,22 +463,24 @@ export default function SnakeAI() {
     let freeCount = 0;
     const visited = new Set<string>();
     const queue = [pos];
-    
+    const snakeSet = new Set(snake.map(seg => `${seg.x},${seg.y}`));
+    const startKey = `${pos.x},${pos.y}`;
+
     while (queue.length > 0 && freeCount < 15) { // 限制搜索范围
       const current = queue.shift()!;
       const key = `${current.x},${current.y}`;
-      
+
       if (visited.has(key)) continue;
       visited.add(key);
-      
-      if (current.x < 0 || current.x >= GRID_SIZE || 
+
+      if (current.x < 0 || current.x >= GRID_SIZE ||
           current.y < 0 || current.y >= GRID_SIZE ||
-          snake.some(seg => seg.x === current.x && seg.y === current.y)) {
+          (snakeSet.has(key) && key !== startKey)) {
         continue;
       }
-      
+
       freeCount++;
-      
+
       // 添加邻居
       queue.push(
         {x: current.x + 1, y: current.y},
@@ -476,7 +489,7 @@ export default function SnakeAI() {
         {x: current.x, y: current.y - 1}
       );
     }
-    
+
     return freeCount;
   }, []);
 

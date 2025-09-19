@@ -27,7 +27,7 @@ export default function Home() {
           <ul className="space-y-2 text-sm text-gray-600 dark:text-gray-300">
             <li>• <strong>神经网络</strong>：AI通过多层神经元处理游戏状态</li>
             <li>• <strong>强化学习</strong>：AI通过试错不断改进策略</li>
-            <li>• <strong>进化算法</strong>：表现好的AI会"繁殖"并变异</li>
+            <li>• <strong>进化算法</strong>：表现好的AI会“繁殖”并变异</li>
             <li>• <strong>实时可视化</strong>：观看AI的学习过程和进步轨迹</li>
           </ul>
         </div>
